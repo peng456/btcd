@@ -43,6 +43,12 @@ import (
 const (
 	// defaultServices describes the default services that are supported by
 	// the server.
+	// 服务节点 描述    SFNodeNetwork表明Peer是一个全节点 SFNodeBloom表明Peer支持Bloom过滤;
+	// wire.SFNodeWitness 见证隔离  https://blog.csdn.net/qq_26499321/article/details/76021275   https://blog.csdn.net/taifei/article/details/73544535
+	// 见证信息就是哪个节点在什么时间验证交易信息的可靠性 . 如果隔离了“见证信息”，那么区块链只记录交易信息.
+	// https://blog.csdn.net/weixin_42874184/article/details/81710113  隔离见证（三）：优点VS缺点 | 比特币技术普及
+
+	// wire.SFNodeCF 提交过滤  没动
 	defaultServices = wire.SFNodeNetwork | wire.SFNodeBloom |
 		wire.SFNodeWitness | wire.SFNodeCF
 
@@ -2003,6 +2009,9 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 // peerHandler is used to handle peer operations such as adding and removing
 // peers to and from the server, banning peers, and broadcasting messages to
 // peers.  It must be run in a goroutine.
+
+// 
+
 func (s *server) peerHandler() {
 	// Start the address manager and sync manager, both of which are needed
 	// by peers.  This is done here since their lifecycle is closely tied
@@ -2245,9 +2254,11 @@ func (s *server) Start() {
 
 	// Start the peer handler which in turn starts the address and block
 	// managers.
+	// sync.WaitGroup  ??? 多协程，是的
 	s.wg.Add(1)
 	go s.peerHandler()
 
+	// 启动失败==》 应急方案
 	if s.nat != nil {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
@@ -2391,8 +2402,8 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 }
 
 func (s *server) upnpUpdateThread() {
-	// Go off immediately to prevent code duplication, thereafter we renew
-	// lease every 15 minutes.
+	// Go off immediately to prevent code duplication（阻止代码重复）, thereafter we renew
+	// lease every 15 minutes.(重新启动至少15分钟（间隔15分钟）)
 	timer := time.NewTimer(0 * time.Second)
 	lport, _ := strconv.ParseInt(activeNetParams.DefaultPort, 10, 16)
 	first := true
@@ -2427,6 +2438,8 @@ out:
 				srvrLog.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
 				first = false
 			}
+
+			// 至少15 分钟
 			timer.Reset(time.Minute * 15)
 		case <-s.quit:
 			break out
@@ -2496,21 +2509,45 @@ func setupRPCListeners() ([]net.Listener, error) {
 // newServer returns a new btcd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
+// server 初始化
+// listenAddrs 服务监听端口
 func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Params, interrupt <-chan struct{}) (*server, error) {
+	// defaultServices  默认服务
 	services := defaultServices
+
+	// NoPeerBloomFilters  没有节点 Bloom 过滤器
+	// http://www.docin.com/p-905966302.html （布隆姆过滤器  判断 某元素 不在集合内）
+	// 原理 代码实现
+	// https://www.jianshu.com/p/b0c0edf7686e
+	// https://www.cnblogs.com/en-heng/p/5881997.html?utm_source=itdadao&utm_medium=referral
 	if cfg.NoPeerBloomFilters {
-		services &^= wire.SFNodeBloom
+		services &^= wire.SFNodeBloom  // SFNodeNetwork表明Peer是一个全节点
 	}
+
+	// NoCFilters 关闭committed过滤(CF)，启用
 	if cfg.NoCFilters {
 		services &^= wire.SFNodeCF
 	}
 
+	// addrmgr 地址管理类  https://www.jianshu.com/p/e897f321dce1
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
 
+	// 网络监听 定义
 	var listeners []net.Listener
+
+	//  NAT traversal options for example UPNP or
+	//// NAT-PMP
+	// 内网 NAT 处理
+	// UPnP https://blog.csdn.net/ddffr/article/details/78800323
+
 	var nat NAT
+
+	// DisableListen 监听是否启动
 	if !cfg.DisableListen {
+		// 启动监听
 		var err error
+
+		// 初始化网络监听服务,返回 listeners, nat
 		listeners, nat, err = initListeners(amgr, listenAddrs, services)
 		if err != nil {
 			return nil, err
@@ -2520,25 +2557,26 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		}
 	}
 
+	// 初始化  服务配置
 	s := server{
-		chainParams:          chainParams,
-		addrManager:          amgr,
-		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
-		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		query:                make(chan interface{}),
-		relayInv:             make(chan relayMsg, cfg.MaxPeers),
-		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
+		chainParams:          chainParams,  // 链参数
+		addrManager:          amgr,  // 地址管理
+		newPeers:             make(chan *serverPeer, cfg.MaxPeers),  //新服务节点，最大连接数
+		donePeers:            make(chan *serverPeer, cfg.MaxPeers),  // 已经接受节点
+		banPeers:             make(chan *serverPeer, cfg.MaxPeers), // 禁止节点
+		query:                make(chan interface{}), // 没懂
+		relayInv:             make(chan relayMsg, cfg.MaxPeers), // 没懂
+		broadcast:            make(chan broadcastMsg, cfg.MaxPeers), // 广播
 		quit:                 make(chan struct{}),
 		modifyRebroadcastInv: make(chan interface{}),
 		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
 		nat:                  nat,
 		db:                   db,
-		timeSource:           blockchain.NewMedianTime(),
+		timeSource:           blockchain.NewMedianTime(),  // 200 ???
 		services:             services,
-		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
-		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
-		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
+		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize), // 默认待签名 缓存记录数量大小  100000
+		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),// 默认待签名hash  缓存记录的hash 数量大小  100000
+		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),  // 没懂
 	}
 
 	// Create the transaction and address indexes if needed.
@@ -2547,6 +2585,12 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	// the addrindex uses data from the txindex during catchup.  If the
 	// addrindex is run first, it may not have the transactions from the
 	// current block indexed.
+	// 区块链 索引
+
+	// txindex  维护一个完整hash-based交易索引。 这样可以通过getrawtransaction RPC让交易数据可用。
+	// AddrIndex  维护一个address-based交易索引，这样可以让searchrawtransactions RPC可用。
+
+
 	var indexes []indexers.Indexer
 	if cfg.TxIndex || cfg.AddrIndex {
 		// Enable transaction index if address index is enabled since it
@@ -2559,7 +2603,7 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 			indxLog.Info("Transaction index is enabled")
 		}
 
-		s.txIndex = indexers.NewTxIndex(db)
+		s.txIndex = indexers.NewTxIndex(db)  // 数据库 + 当前块id(当前块id 没有初始化)  (包含块 hash )
 		indexes = append(indexes, s.txIndex)
 	}
 	if cfg.AddrIndex {
@@ -2567,6 +2611,7 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		s.addrIndex = indexers.NewAddrIndex(db, chainParams)
 		indexes = append(indexes, s.addrIndex)
 	}
+
 	if !cfg.NoCFilters {
 		indxLog.Info("Committed filter index is enabled")
 		s.cfIndex = indexers.NewCfIndex(db, chainParams)
@@ -2574,22 +2619,25 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	}
 
 	// Create an index manager if any of the optional indexes are enabled.
+	// 创建 索引 管理器
 	var indexManager blockchain.IndexManager
 	if len(indexes) > 0 {
 		indexManager = indexers.NewManager(db, indexes)
 	}
 
 	// Merge given checkpoints with the default ones unless they are disabled.
+	// 检查节点   和  cfg 提供检查节点合并
 	var checkpoints []chaincfg.Checkpoint
 	if !cfg.DisableCheckpoints {
 		checkpoints = mergeCheckpoints(s.chainParams.Checkpoints, cfg.addCheckpoints)
 	}
 
 	// Create a new block chain instance with the appropriate configuration.
+	// 新建区块
 	var err error
-	s.chain, err = blockchain.New(&blockchain.Config{
+	s.chain, err = blockchain.New(&blockchain.Config{ // 配置
 		DB:           s.db,
-		Interrupt:    interrupt,
+		Interrupt:    interrupt,  // 中断信号 处理器
 		ChainParams:  s.chainParams,
 		Checkpoints:  checkpoints,
 		TimeSource:   s.timeSource,
@@ -2822,8 +2870,10 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 // initListeners initializes the configured net listeners and adds any bound
 // addresses to the address manager. Returns the listeners and a NAT interface,
 // which is non-nil if UPnP is in use.
+// UPnP https://blog.csdn.net/ddffr/article/details/78800323
 func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wire.ServiceFlag) ([]net.Listener, NAT, error) {
 	// Listen for TCP connections at the configured addresses
+	// 分析listenAddrs IP地址
 	netAddrs, err := parseListeners(listenAddrs)
 	if err != nil {
 		return nil, nil, err
@@ -2831,6 +2881,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 
 	listeners := make([]net.Listener, 0, len(netAddrs))
 	for _, addr := range netAddrs {
+		// 启动网络监听（ 或者应该只是检测一下）
 		listener, err := net.Listen(addr.Network(), addr.String())
 		if err != nil {
 			srvrLog.Warnf("Can't listen on %s: %v", addr, err)
@@ -2841,6 +2892,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 
 	var nat NAT
 	if len(cfg.ExternalIPs) != 0 {
+		// 额外IP  白名单
 		defaultPort, err := strconv.ParseUint(activeNetParams.DefaultPort, 10, 16)
 		if err != nil {
 			srvrLog.Errorf("Can not parse default port %s for active chain: %v",
@@ -2875,6 +2927,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 			}
 		}
 	} else {
+		// Upnp 协议 cfg.Upnp 是否启用 Upnp 协议
 		if cfg.Upnp {
 			var err error
 			nat, err = Discover()
@@ -2887,6 +2940,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 		// Add bound addresses to address manager to be advertised to peers.
 		for _, listener := range listeners {
 			addr := listener.Addr().String()
+			// 添加网络节点
 			err := addLocalAddress(amgr, addr, services)
 			if err != nil {
 				amgrLog.Warnf("Skipping bound address %s: %v", addr, err)
@@ -2894,6 +2948,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 		}
 	}
 
+	// 返回 listeners，nat
 	return listeners, nat, nil
 }
 

@@ -9,5 +9,5 @@ const (
 	// interpreted to be a block number.  Since an average of one block
 	// is generated per 10 minutes, this allows blocks for about 9,512
 	// years.
-	LockTimeThreshold = 5e8 // Tue Nov 5 00:53:20 1985 UTC
+	LockTimeThreshold = 5e8 // Tue Nov 5 00:53:20 1985 UTC  5 * 10**8 秒？？？
 )

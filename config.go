@@ -42,7 +42,7 @@ const (
 	defaultMaxPeers              = 125
 	defaultBanDuration           = time.Hour * 24
 	defaultBanThreshold          = 100
-	defaultConnectTimeout        = time.Second * 30
+	defaultConnectTimeout        = time.Second * 10
 	defaultMaxRPCClients         = 10
 	defaultMaxRPCWebsockets      = 25
 	defaultMaxRPCConcurrentReqs  = 20
@@ -92,6 +92,7 @@ func minUint32(a, b uint32) uint32 {
 // config defines the configuration options for btcd.
 //
 // See loadConfig for details on the configuration load process.
+// https://www.jianshu.com/p/d68404f19695  汉语解释见此处
 type config struct {
 	ShowVersion          bool          `short:"V" long:"version" description:"Display version information and exit"`
 	ConfigFile           string        `short:"C" long:"configfile" description:"Path to configuration file"`
@@ -174,6 +175,7 @@ type config struct {
 
 // serviceOptions defines the configuration options for the daemon as a service on
 // Windows.
+//
 type serviceOptions struct {
 	ServiceCommand string `short:"s" long:"service" description:"Service command {install, remove, start, stop}"`
 }
@@ -671,6 +673,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// --addPeer and --connect do not mix.
+	// 不能同时存在？？？？
 	if len(cfg.AddPeers) > 0 && len(cfg.ConnectPeers) > 0 {
 		str := "%s: the --addpeer and --connect options can not be " +
 			"mixed"
@@ -687,6 +690,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Connect means no DNS seeding.
+	// 如果有确定节点，则不需要DNSSeed
 	if len(cfg.ConnectPeers) > 0 {
 		cfg.DisableDNSSeed = true
 	}
@@ -694,13 +698,15 @@ func loadConfig() (*config, []string, error) {
 	// Add the default listener if none were specified. The default
 	// listener is all addresses on the listen port for the network
 	// we are to connect to.
+	// 未设置及广播地址，则向所有计算机8843 端口广播
 	if len(cfg.Listeners) == 0 {
 		cfg.Listeners = []string{
-			net.JoinHostPort("", activeNetParams.DefaultPort),
+			net.JoinHostPort("", activeNetParams.DefaultPort), // DefaultPort 在params 中
 		}
 	}
 
 	// Check to make sure limited and admin users don't have the same username
+	// 不能拥有相同用户名称
 	if cfg.RPCUser == cfg.RPCLimitUser && cfg.RPCUser != "" {
 		str := "%s: --rpcuser and --rpclimituser must not specify the " +
 			"same username"
@@ -711,6 +717,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Check to make sure limited and admin users don't have the same password
+	// 不能拥有相同密码
 	if cfg.RPCPass == cfg.RPCLimitPass && cfg.RPCPass != "" {
 		str := "%s: --rpcpass and --rpclimitpass must not specify the " +
 			"same password"
@@ -743,6 +750,7 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
+	//  RPC  qps
 	if cfg.RPCMaxConcurrentReqs < 0 {
 		str := "%s: The rpcmaxwebsocketconcurrentrequests option may " +
 			"not be less than 0 -- parsed [%d]"
@@ -752,6 +760,7 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
+	// 交易费用
 	// Validate the the minrelaytxfee.
 	cfg.minRelayTxFee, err = btcutil.NewAmount(cfg.MinRelayTxFee)
 	if err != nil {
@@ -762,7 +771,7 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
-	// Limit the max block size to a sane value.
+	// Limit the max block size to a sane value.  between 1000 and (1000000 - 1000)
 	if cfg.BlockMaxSize < blockMaxSizeMin || cfg.BlockMaxSize >
 		blockMaxSizeMax {
 
@@ -775,7 +784,7 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
-	// Limit the max block weight to a sane value.
+	// Limit the max block weight to a sane value. between 4000 ~(4000000 - 4000)
 	if cfg.BlockMaxWeight < blockMaxWeightMin ||
 		cfg.BlockMaxWeight > blockMaxWeightMax {
 
@@ -789,6 +798,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Limit the max orphan count to a sane vlue.
+	// 允许 最大 孤独 交易
 	if cfg.MaxOrphanTxs < 0 {
 		str := "%s: The maxorphantx option may not be less than 0 " +
 			"-- parsed [%d]"
@@ -833,6 +843,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// --txindex and --droptxindex do not mix.
+	// ???
 	if cfg.TxIndex && cfg.DropTxIndex {
 		err := fmt.Errorf("%s: the --txindex and --droptxindex "+
 			"options may  not be activated at the same time",

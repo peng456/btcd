@@ -106,6 +106,7 @@ const (
 // Params defines a Bitcoin network by its parameters.  These parameters may be
 // used by Bitcoin applications to differentiate networks as well as addresses
 // and keys for one network from those intended for use on another network.
+// 网络相关参数
 type Params struct {
 	// Name defines a human-readable identifier for the network.
 	Name string
@@ -121,6 +122,16 @@ type Params struct {
 	DNSSeeds []DNSSeed
 
 	// GenesisBlock defines the first block of the chain.
+	// 定义 区块链 第一个块
+
+	//// MsgBlock implements the Message interface and represents a bitcoin
+	//// block message.  It is used to deliver block and transaction information in
+	//// response to a getdata message (MsgGetData) for a given block hash.
+	//type MsgBlock struct {
+	//Header       BlockHeader
+	//Transactions []*MsgTx
+    //}
+
 	GenesisBlock *wire.MsgBlock
 
 	// GenesisHash is the starting block hash.
@@ -144,6 +155,7 @@ type Params struct {
 	// coins (coinbase transactions) can be spent.
 	CoinbaseMaturity uint16
 
+	// 这个参数决定了多少个block以后比特币的奖励(补贴,挖矿奖励)会减半。
 	// SubsidyReductionInterval is the interval of blocks before the subsidy
 	// is reduced.
 	SubsidyReductionInterval int32
@@ -182,7 +194,7 @@ type Params struct {
 	Checkpoints []Checkpoint
 
 	// These fields are related to voting on consensus rule changes as
-	// defined by BIP0009.
+	// defined by BIP0009.（软叉标准）
 	//
 	// RuleChangeActivationThreshold is the number of blocks in a threshold
 	// state retarget window for which a positive vote for a rule change
@@ -221,6 +233,7 @@ type Params struct {
 	HDCoinType uint32
 }
 
+
 // MainNetParams defines the network parameters for the main Bitcoin network.
 var MainNetParams = Params{
 	Name:        "mainnet",
@@ -238,15 +251,15 @@ var MainNetParams = Params{
 	// Chain parameters
 	GenesisBlock:             &genesisBlock,
 	GenesisHash:              &genesisHash,
-	PowLimit:                 mainPowLimit,
+	PowLimit:                 mainPowLimit, // new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)  bigOne = big.NewInt(1)
 	PowLimitBits:             0x1d00ffff,
 	BIP0034Height:            227931, // 000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8
 	BIP0065Height:            388381, // 000000000000000004c2b624ed5d7756c508d90fd0da2c7c679febfa6c4735f0
 	BIP0066Height:            363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
-	CoinbaseMaturity:         100,
-	SubsidyReductionInterval: 210000,
-	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
+	CoinbaseMaturity:         100,    // https://www.jianshu.com/p/9e22e37fc978   coinbase交易至少要有100个确认后才能被花费
+	SubsidyReductionInterval: 210000, // 每经过 21万 区块链  奖励减半
+	TargetTimespan:           time.Hour * 24 * 14, // 14 days  ？？？
+	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes  // 每10分钟生成一个区块链
 	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
 	ReduceMinDifficulty:      false,
 	MinDiffReductionTime:     0,

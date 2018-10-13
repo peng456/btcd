@@ -28,6 +28,7 @@ const (
 	MinCoinbaseScriptLen = 2
 
 	// MaxCoinbaseScriptLen is the maximum length a coinbase script can be.
+	// 最大的脚本长度？？？
 	MaxCoinbaseScriptLen = 100
 
 	// medianTimeBlocks is the number of previous blocks which should be
@@ -135,7 +136,15 @@ func SequenceLockActive(sequenceLock *SequenceLock, blockHeight int32,
 func IsFinalizedTransaction(tx *btcutil.Tx, blockHeight int32, blockTime time.Time) bool {
 	msgTx := tx.MsgTx()
 
+	// (lockTime == 0) || (int64(lockTime) < blockTimeOrHeight)  ==》 交易完成
+	// https://blog.csdn.net/u010733398/article/details/52921014
+	//Since replacement is not used currently, all transactions Bitcoin creates have LockTime = 0 and Sequence = UINT_MAX. This is the case with the genesis block's generation transaction.
+
+	//https://blog.csdn.net/u010733398/article/details/52494489 重要
+    //https://blog.csdn.net/chunlongyu/article/details/80320696 重要
+
 	// Lock time of zero means the transaction is finalized.
+	// 0 意味着已经 完成
 	lockTime := msgTx.LockTime
 	if lockTime == 0 {
 		return true
@@ -146,7 +155,7 @@ func IsFinalizedTransaction(tx *btcutil.Tx, blockHeight int32, blockTime time.Ti
 	// value is before the txscript.LockTimeThreshold.  When it is under the
 	// threshold it is a block height.
 	blockTimeOrHeight := int64(0)
-	if lockTime < txscript.LockTimeThreshold {
+	if lockTime < txscript.LockTimeThreshold {  //  LockTimeThreshold 5 * 10**8
 		blockTimeOrHeight = int64(blockHeight)
 	} else {
 		blockTimeOrHeight = blockTime.Unix()
@@ -155,11 +164,13 @@ func IsFinalizedTransaction(tx *btcutil.Tx, blockHeight int32, blockTime time.Ti
 		return true
 	}
 
+	// 没懂 https://blog.csdn.net/chunlongyu/article/details/80320696
 	// At this point, the transaction's lock time hasn't occurred yet, but
 	// the transaction might still be finalized if the sequence number
 	// for all transaction inputs is maxed out.
 	for _, txIn := range msgTx.TxIn {
-		if txIn.Sequence != math.MaxUint32 {
+		if txIn.Sequence != math.MaxUint32 {  // txIn.Sequence 默认  MaxTxInSequenceNum  uint32 = 0xffffffff ；MaxUint32 = 1<<32 - 1
+
 			return false
 		}
 	}
@@ -193,12 +204,17 @@ func isBIP0030Node(node *blockNode) bool {
 // approximately every 4 years.
 func CalcBlockSubsidy(height int32, chainParams *chaincfg.Params) int64 {
 	if chainParams.SubsidyReductionInterval == 0 {
-		return baseSubsidy
+		return baseSubsidy   // 初始奖励50个比特币
 	}
 
-	// Equivalent to: baseSubsidy / 2^(height/subsidyHalvingInterval)
+	// Equivalent to: baseSubsidy / 2^(height/subsidyHalvingInterval) 随着块增减，一定数量块 之后减半
 	return baseSubsidy >> uint(height/chainParams.SubsidyReductionInterval)
-}
+	// baseSubsidy  ： 50 * btcutil.SatoshiPerBitcoin  ； SubsidyReductionInterval 21万（每经历 21万区块 奖励减半）  右移一位，*1/2 .一定数量后，变为0，那时候挖矿不在有系统奖励，矿工靠交易费挣钱
+    // 比特币共计 2100 万个，所以共计递减 100 次。每十分钟产生一个块。需要 210000 * 1/50( 1 + 2  + 4   +   ….. +  2**99)  *  10(分钟)  ~= ？？ 年
+    // 貌似 不对 ，不应该是 分类100次数。 50btc 递减除2，不能再分的时候，停止 ：： 50 * btcutil.SatoshiPerBitcoin  ：： 50 * 1e8
+    // 2**32 = 4294967296  所以比特币也就 递减32次
+    // (2100万 * 10 分钟 ) / 60 / 24 /365  ~= 400 年   ？？？
+ }
 
 // CheckTransactionSanity performs some preliminary checks on a transaction to
 // ensure it is sane.  These checks are context free.
@@ -350,8 +366,10 @@ func CheckProofOfWork(block *btcutil.Block, powLimit *big.Int) error {
 func CountSigOps(tx *btcutil.Tx) int {
 	msgTx := tx.MsgTx()
 
+	// 交易 有输入输出 多个输入多个输出 ？？？ ； 我记得 一个输入 多个输出
 	// Accumulate the number of signature operations in all transaction
 	// inputs.
+	// 计算 input 操作步骤  方法：： txscript.GetSigOpCount
 	totalSigOps := 0
 	for _, txIn := range msgTx.TxIn {
 		numSigOps := txscript.GetSigOpCount(txIn.SignatureScript)
@@ -360,6 +378,7 @@ func CountSigOps(tx *btcutil.Tx) int {
 
 	// Accumulate the number of signature operations in all transaction
 	// outputs.
+	// 计算 output 操作步骤
 	for _, txOut := range msgTx.TxOut {
 		numSigOps := txscript.GetSigOpCount(txOut.PkScript)
 		totalSigOps += numSigOps

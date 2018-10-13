@@ -30,11 +30,13 @@ const (
 	// CoinbaseFlags is added to the coinbase script of a generated block
 	// and is used to monitor BIP16 support as well as blocks that are
 	// generated via btcd.
+	//https://www.jianshu.com/p/439733255d10
 	CoinbaseFlags = "/P2SH/btcd/"
 )
 
 // TxDesc is a descriptor about a transaction in a transaction source along with
 // additional metadata.
+// 交易记录 描述
 type TxDesc struct {
 	// Tx is the transaction associated with the entry.
 	Tx *btcutil.Tx
@@ -47,9 +49,11 @@ type TxDesc struct {
 	Height int32
 
 	// Fee is the total fee the transaction associated with the entry pays.
+	// 总费用
 	Fee int64
 
 	// FeePerKB is the fee the transaction pays in Satoshi per 1000 bytes.
+	// 价格    聪/千字节
 	FeePerKB int64
 }
 
@@ -58,6 +62,7 @@ type TxDesc struct {
 //
 // The interface contract requires that all of these methods are safe for
 // concurrent access with respect to the source.
+// 账本（记录  一条  && 一条）
 type TxSource interface {
 	// LastUpdated returns the last time a transaction was added to or
 	// removed from the source pool.
@@ -65,6 +70,7 @@ type TxSource interface {
 
 	// MiningDescs returns a slice of mining descriptors for all the
 	// transactions in the source pool.
+	// 描述
 	MiningDescs() []*TxDesc
 
 	// HaveTransaction returns whether or not the passed transaction hash
@@ -85,6 +91,7 @@ type txPrioItem struct {
 	// on.  It will only be set when the transaction references other
 	// transactions in the source pool and hence must come after them in
 	// a block.
+	// 应该是上一个 交易 hash ,不确定
 	dependsOn map[chainhash.Hash]struct{}
 }
 
@@ -139,6 +146,7 @@ func (pq *txPriorityQueue) Pop() interface{} {
 // function so it can immediately be used with heap.Push/Pop.
 func (pq *txPriorityQueue) SetLessFunc(lessFunc txPriorityQueueLessFunc) {
 	pq.lessFunc = lessFunc
+	// 堆 原理及实现 http://www.cnblogs.com/vamei/archive/2013/03/20/2966612.html
 	heap.Init(pq)
 }
 
@@ -172,6 +180,8 @@ func txPQByFee(pq *txPriorityQueue, i, j int) bool {
 // The priority queue can grow larger than the reserved space, but extra copies
 // of the underlying array can be avoided by reserving a sane value.
 func newTxPriorityQueue(reserve int, sortByFee bool) *txPriorityQueue {
+	// heap 堆 实现 交易队列（按照 优先级 or 交易费用 排序）
+	// 堆 原理及实现 http://www.cnblogs.com/vamei/archive/2013/03/20/2966612.html
 	pq := &txPriorityQueue{
 		items: make([]*txPrioItem, 0, reserve),
 	}
@@ -250,14 +260,16 @@ func standardCoinbaseScript(nextBlockHeight int32, extraNonce uint64) ([]byte, e
 //
 // See the comment for NewBlockTemplate for more information about why the nil
 // address handling is useful.
+// 创建 块中 第一个交易（系统奖励）
 func createCoinbaseTx(params *chaincfg.Params, coinbaseScript []byte, nextBlockHeight int32, addr btcutil.Address) (*btcutil.Tx, error) {
 	// Create the script to pay to the provided payment address if one was
 	// specified.  Otherwise create a script that allows the coinbase to be
 	// redeemable by anyone.
+	// addr 这是 矿工地址
 	var pkScript []byte
 	if addr != nil {
 		var err error
-		pkScript, err = txscript.PayToAddrScript(addr)
+		pkScript, err = txscript.PayToAddrScript(addr) // 公钥key签名脚本
 		if err != nil {
 			return nil, err
 		}
@@ -270,20 +282,22 @@ func createCoinbaseTx(params *chaincfg.Params, coinbaseScript []byte, nextBlockH
 		}
 	}
 
+	// 生成块中第一个交易（系统奖励）txIn
 	tx := wire.NewMsgTx(wire.TxVersion)
 	tx.AddTxIn(&wire.TxIn{
 		// Coinbase transactions have no inputs, so previous outpoint is
 		// zero hash and max index.
-		PreviousOutPoint: *wire.NewOutPoint(&chainhash.Hash{},
-			wire.MaxPrevOutIndex),
-		SignatureScript: coinbaseScript,
+		PreviousOutPoint: *wire.NewOutPoint(&chainhash.Hash{}, // 系统地址（公钥） zero hash (都是0)
+			wire.MaxPrevOutIndex),   // MaxPrevOutIndex: 0xffffffff
+		SignatureScript: coinbaseScript, // 脚本
 		Sequence:        wire.MaxTxInSequenceNum,
 	})
+	// txOut
 	tx.AddTxOut(&wire.TxOut{
-		Value:    blockchain.CalcBlockSubsidy(nextBlockHeight, params),
-		PkScript: pkScript,
+		Value:    blockchain.CalcBlockSubsidy(nextBlockHeight, params),// 计算出 系统奖励的 币数量 nextBlockHeight 当前块位置
+		PkScript: pkScript, // 验证脚本（这里面有矿工地址？？？）
 	})
-	return btcutil.NewTx(tx), nil
+	return btcutil.NewTx(tx), nil  // 返回 系统奖励交易tx
 }
 
 // spendTransaction updates the passed view by marking the inputs to the passed
@@ -345,10 +359,11 @@ func medianAdjustedTime(chainState *blockchain.BestState, timeSource blockchain.
 // based on a given mining policy and source of transactions to choose from.
 // It also houses additional state required in order to ensure the templates
 // are built on top of the current best chain and adhere to the consensus rules.
+// 区块链模板  用来打包的  账本块
 type BlkTmplGenerator struct {
-	policy      *Policy
-	chainParams *chaincfg.Params
-	txSource    TxSource
+	policy      *Policy  //  规则
+	chainParams *chaincfg.Params // 配置
+	txSource    TxSource  // 元数据
 	chain       *blockchain.BlockChain
 	timeSource  blockchain.MedianTimeSource
 	sigCache    *txscript.SigCache
@@ -440,8 +455,11 @@ func NewBlkTmplGenerator(policy *Policy, params *chaincfg.Params,
 //  |  transactions (while block size   |   |
 //  |  <= policy.BlockMinSize)          |   |
 //   -----------------------------------  --
+
+// 打包: 生成块中第一个uxto && 从交易池中取出交易（这些交易需要验证）  payToAddress 挖矿者地址
 func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*BlockTemplate, error) {
 	// Extend the most recently known best block.
+	// 获取 UTXO[1~n]
 	best := g.chain.BestSnapshot()
 	nextBlockHeight := best.Height + 1
 
@@ -463,7 +481,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	if err != nil {
 		return nil, err
 	}
-	coinbaseSigOpCost := int64(blockchain.CountSigOps(coinbaseTx)) * blockchain.WitnessScaleFactor
+	coinbaseSigOpCost := int64(blockchain.CountSigOps(coinbaseTx)) * blockchain.WitnessScaleFactor  //  计算 操作步数   * 4  不知道干啥的 (四个见证者 所以操作步数 * 4 ？？？)
 
 	// Get the current source transactions and create a priority queue to
 	// hold the transactions which are ready for inclusion into a block
@@ -472,22 +490,23 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	// choose the initial sort order for the priority queue based on whether
 	// or not there is an area allocated for high-priority transactions.
 	sourceTxns := g.txSource.MiningDescs()
-	sortedByFee := g.policy.BlockPrioritySize == 0
-	priorityQueue := newTxPriorityQueue(len(sourceTxns), sortedByFee)
+	sortedByFee := g.policy.BlockPrioritySize == 0 // BlockPrioritySize 5000
+	priorityQueue := newTxPriorityQueue(len(sourceTxns), sortedByFee) // sortedByFee false, 所以按优先级
 
 	// Create a slice to hold the transactions to be included in the
-	// generated block with reserved space.  Also create a utxo view to
+	// generated block with reserved space.  Also create a utxo view to    *** utxo view 缓存？？？
 	// house all of the input transactions so multiple lookups can be
 	// avoided.
 	blockTxns := make([]*btcutil.Tx, 0, len(sourceTxns))
-	blockTxns = append(blockTxns, coinbaseTx)
-	blockUtxos := blockchain.NewUtxoViewpoint()
+	blockTxns = append(blockTxns, coinbaseTx)  // 奖励 utxo 放到 block 中
+	blockUtxos := blockchain.NewUtxoViewpoint() // 没看懂。。。。。。
 
 	// dependers is used to track transactions which depend on another
 	// transaction in the source pool.  This, in conjunction with the
 	// dependsOn map kept with each dependent transaction helps quickly
 	// determine which dependent transactions are now eligible for inclusion
 	// in the block once each transaction has been included.
+	// 索引吧。 追踪交易（交易依赖另一个交易）
 	dependers := make(map[chainhash.Hash]map[chainhash.Hash]*txPrioItem)
 
 	// Create slices to hold the fees and number of signature operations
@@ -504,18 +523,21 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	log.Debugf("Considering %d transactions for inclusion to new block",
 		len(sourceTxns))
 
+//	交易池 里面交易验证
+
 mempoolLoop:
+	// https://blog.csdn.net/mofiu/article/details/77318376  go  loop
 	for _, txDesc := range sourceTxns {
 		// A block can't have more than one coinbase or contain
 		// non-finalized transactions.
 		tx := txDesc.Tx
 		if blockchain.IsCoinBase(tx) {
-			log.Tracef("Skipping coinbase tx %s", tx.Hash())
+			log.Tracef("Skipping coinbase tx %s", tx.Hash()) // 奖励 交易记录 跳过
 			continue
 		}
 		if !blockchain.IsFinalizedTransaction(tx, nextBlockHeight,
 			g.timeSource.AdjustedTime()) {
-
+			// 此交易 未完成 跳过
 			log.Tracef("Skipping non-finalized tx %s", tx.Hash())
 			continue
 		}
@@ -527,7 +549,7 @@ mempoolLoop:
 		// dependencies in the final generated block.
 		utxos, err := g.chain.FetchUtxoView(tx)
 		if err != nil {
-			log.Warnf("Unable to fetch utxo view for tx %s: %v",
+			log.Warnf("Unable to fetch utxo view for tx %s: %v",  // utxo
 				tx.Hash(), err)
 			continue
 		}
@@ -535,6 +557,7 @@ mempoolLoop:
 		// Setup dependencies for any transactions which reference
 		// other transactions in the mempool so they can be properly
 		// ordered below.
+
 		prioItem := &txPrioItem{tx: tx}
 		for _, txIn := range tx.MsgTx().TxIn {
 			originHash := &txIn.PreviousOutPoint.Hash
@@ -551,7 +574,7 @@ mempoolLoop:
 				// The transaction is referencing another
 				// transaction in the source pool, so setup an
 				// ordering dependency.
-				deps, exists := dependers[*originHash]
+				deps, exists := dependers[*originHash] // dependers
 				if !exists {
 					deps = make(map[chainhash.Hash]*txPrioItem)
 					dependers[*originHash] = deps
@@ -568,10 +591,12 @@ mempoolLoop:
 				continue
 			}
 		}
+		// prioItem.dependsOn  上边过滤后的数据
 
 		// Calculate the final transaction priority using the input
 		// value age sum as well as the adjusted transaction size.  The
 		// formula is: sum(inputValue * inputAge) / adjustedTxSize
+		// 计算优先级
 		prioItem.priority = CalcPriority(tx.MsgTx(), utxos,
 			nextBlockHeight)
 
@@ -623,7 +648,7 @@ mempoolLoop:
 
 		switch {
 		// If segregated witness has not been activated yet, then we
-		// shouldn't include any witness transactions in the block.
+		// shouldn't include any witness transactions in the block.  隔离见证
 		case !segwitActive && tx.HasWitness():
 			continue
 
@@ -644,7 +669,7 @@ mempoolLoop:
 					blockchain.CoinbaseWitnessDataLen),
 			}
 			coinbaseCopy.MsgTx().AddTxOut(&wire.TxOut{
-				PkScript: bytes.Repeat([]byte("a"),
+				PkScript: bytes.Repeat([]byte("a"),  //  ?????
 					blockchain.CoinbaseWitnessPkScriptLength),
 			})
 
@@ -734,6 +759,8 @@ mempoolLoop:
 
 				heap.Push(priorityQueue, prioItem)
 				continue
+
+				//  ????
 			}
 		}
 
@@ -905,11 +932,14 @@ func (g *BlkTmplGenerator) UpdateBlockTime(msgBlock *wire.MsgBlock) error {
 	// The new timestamp is potentially adjusted to ensure it comes after
 	// the median time of the last several blocks per the chain consensus
 	// rules.
+	// 获取 时间  打包块   时间戳。
 	newTime := medianAdjustedTime(g.chain.BestSnapshot(), g.timeSource)
 	msgBlock.Header.Timestamp = newTime
 
 	// Recalculate the difficulty if running on a network that requires it.
+	// 重新计算本块生成 难度（主网 设置为 false,即不重新计算）
 	if g.chainParams.ReduceMinDifficulty {
+		// 不过如何计算难度的？？？
 		difficulty, err := g.chain.CalcNextRequiredDifficulty(newTime)
 		if err != nil {
 			return err
@@ -925,6 +955,8 @@ func (g *BlkTmplGenerator) UpdateBlockTime(msgBlock *wire.MsgBlock) error {
 // height.  It also recalculates and updates the new merkle root that results
 // from changing the coinbase script.
 func (g *BlkTmplGenerator) UpdateExtraNonce(msgBlock *wire.MsgBlock, blockHeight int32, extraNonce uint64) error {
+
+	// 返回脚本（用于签名）BIP16 检测建议长度
 	coinbaseScript, err := standardCoinbaseScript(blockHeight, extraNonce)
 	if err != nil {
 		return err
@@ -935,14 +967,17 @@ func (g *BlkTmplGenerator) UpdateExtraNonce(msgBlock *wire.MsgBlock, blockHeight
 			len(coinbaseScript), blockchain.MinCoinbaseScriptLen,
 			blockchain.MaxCoinbaseScriptLen)
 	}
+
+	// 块中第一个交易，用于产生 挖矿奖励
 	msgBlock.Transactions[0].TxIn[0].SignatureScript = coinbaseScript
 
 	// TODO(davec): A btcutil.Block should use saved in the state to avoid
 	// recalculating all of the other transaction hashes.
 	// block.Transactions[0].InvalidateCache()
 
-	// Recalculate the merkle root with the updated extra nonce.
+	// Recalculate the merkle root with the updated extra nonce. 脚本改变，则重新生成 块的 默克尔树
 	block := btcutil.NewBlock(msgBlock)
+	// 无见证者
 	merkles := blockchain.BuildMerkleTreeStore(block.Transactions(), false)
 	msgBlock.Header.MerkleRoot = *merkles[len(merkles)-1]
 	return nil

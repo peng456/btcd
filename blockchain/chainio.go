@@ -69,6 +69,8 @@ var (
 
 	// byteOrder is the preferred byte order used for serializing numeric
 	// fields for storage in the database.
+
+	// ????
 	byteOrder = binary.LittleEndian
 )
 
@@ -1004,9 +1006,16 @@ func dbPutBestState(dbTx database.Tx, snapshot *BestState, workSum *big.Int) err
 // the genesis block, so it must only be called on an uninitialized database.
 func (b *BlockChain) createChainState() error {
 	// Create a new node from the genesis block and set it as the best node.
+
+	// 创建创世块
 	genesisBlock := btcutil.NewBlock(b.chainParams.GenesisBlock)
+	// 设置 创世块 高度
 	genesisBlock.SetHeight(0)
+
+	// header
 	header := &genesisBlock.MsgBlock().Header
+
+	// 创建节点
 	node := newBlockNode(header, nil)
 	node.status = statusDataStored | statusValid
 	b.bestChain.SetTip(node)
@@ -1024,6 +1033,7 @@ func (b *BlockChain) createChainState() error {
 
 	// Create the initial the database chain state including creating the
 	// necessary index buckets and inserting the genesis block.
+	// 数据库整理
 	err := b.db.Update(func(dbTx database.Tx) error {
 		meta := dbTx.Metadata()
 
@@ -1074,6 +1084,7 @@ func (b *BlockChain) createChainState() error {
 		}
 
 		// Save the genesis block to the block index database.
+		// 存储到数据库
 		err = dbStoreBlockNode(dbTx, node)
 		if err != nil {
 			return err
@@ -1093,12 +1104,13 @@ func (b *BlockChain) createChainState() error {
 		}
 
 		// Store the genesis block into the database.
+		// 存储到数据库
 		return dbStoreBlock(dbTx, genesisBlock)
 	})
 	return err
 }
 
-// initChainState attempts to load and initialize the chain state from the
+// initChainState attempts to load（加载） and initialize the chain state from the
 // database.  When the db does not yet contain any chain state, both it and the
 // chain state are initialized to the genesis block.
 func (b *BlockChain) initChainState() error {
@@ -1106,17 +1118,25 @@ func (b *BlockChain) initChainState() error {
 	// everything from scratch or upgrade certain buckets.
 	var initialized, hasBlockIndex bool
 	err := b.db.View(func(dbTx database.Tx) error {
+
+		// 此方法并没有 返回err  呀？？？
+
+		// 获取 链 状态
 		initialized = dbTx.Metadata().Get(chainStateKeyName) != nil
+
+		// 获取 块 头部  索引。 bucket 桶，其实是map
 		hasBlockIndex = dbTx.Metadata().Bucket(blockIndexBucketName) != nil
-		return nil
+		return nil  // 为啥return nil  . 本发方法 如何  方式 err
 	})
 	if err != nil {
 		return err
 	}
 
+	// initialized 能穿透 匿名函数
 	if !initialized {
 		// At this point the database has not already been initialized, so
 		// initialize both it and the chain state to the genesis block.
+		// 数据库未准备好，初始化数据库 and chain 创世块
 		return b.createChainState()
 	}
 
@@ -1127,6 +1147,7 @@ func (b *BlockChain) initChainState() error {
 		}
 	}
 
+	// 生成新的块？？？
 	// Attempt to load the chain state from the database.
 	err = b.db.View(func(dbTx database.Tx) error {
 		// Fetch the stored chain state from the database metadata.
@@ -1253,6 +1274,7 @@ func (b *BlockChain) initChainState() error {
 		return err
 	}
 
+	// dertiy 写入数据库
 	// As we might have updated the index after it was loaded, we'll
 	// attempt to flush the index to the DB. This will only result in a
 	// write if the elements are dirty, so it'll usually be a noop.
@@ -1261,6 +1283,7 @@ func (b *BlockChain) initChainState() error {
 
 // deserializeBlockRow parses a value in the block index bucket into a block
 // header and block status bitfield.
+// 反序列化，解析出 数据
 func deserializeBlockRow(blockRow []byte) (*wire.BlockHeader, blockStatus, error) {
 	buffer := bytes.NewReader(blockRow)
 
@@ -1350,6 +1373,8 @@ func dbStoreBlockNode(dbTx database.Tx, node *blockNode) error {
 
 // dbStoreBlock stores the provided block in the database if it is not already
 // there. The full block data is written to ffldb.
+
+//？？？？？
 func dbStoreBlock(dbTx database.Tx, block *btcutil.Block) error {
 	hasBlock, err := dbTx.HasBlock(block.Hash())
 	if err != nil {

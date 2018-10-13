@@ -116,6 +116,7 @@ const (
 var halfOrder = new(big.Int).Rsh(btcec.S256().N, 1)
 
 // Engine is the virtual machine that executes scripts.
+// Engine :: virtual machine vm 虚拟机 。。。。虚拟机的含义
 type Engine struct {
 	scripts         [][]parsedOpcode
 	scriptIdx       int

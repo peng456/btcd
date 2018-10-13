@@ -52,7 +52,7 @@ type blockChainContext struct {
 	mainChain bool
 }
 
-// migrateBlockIndex migrates all block entries from the v1 block index bucket
+																																																			// migrateBlockIndex migrates all block entries from the v1 block index bucket
 // to the v2 bucket. The v1 bucket stores all block entries keyed by block hash,
 // whereas the v2 bucket stores the exact same values, but keyed instead by
 // block height + hash.

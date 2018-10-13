@@ -64,7 +64,7 @@ type BestState struct {
 	Bits        uint32         // The difficulty bits of the block.
 	BlockSize   uint64         // The size of the block.
 	BlockWeight uint64         // The weight of the block.
-	NumTxns     uint64         // The number of txns in the block.
+	NumTxns     uint64         // The number of txns in the block. 交易单 数量
 	TotalTxns   uint64         // The total number of txns in the chain.
 	MedianTime  time.Time      // Median time as per CalcPastMedianTime.
 }
@@ -1259,7 +1259,10 @@ func (b *BlockChain) IsCurrent() bool {
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) BestSnapshot() *BestState {
-	b.stateLock.RLock()
+
+	// https://www.bbsmax.com/A/obzbk12bJE/  锁的原理
+	// http://www.cnblogs.com/niniwzw/p/3153955.html
+	b.stateLock.RLock()  // 	b.chainLock.RLock()
 	snapshot := b.stateSnapshot
 	b.stateLock.RUnlock()
 	return snapshot
@@ -1308,7 +1311,7 @@ func (b *BlockChain) BlockLocatorFromHash(hash *chainhash.Hash) BlockLocator {
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) LatestBlockLocator() (BlockLocator, error) {
-	b.chainLock.RLock()
+	b.chainLock.RLock()   // go 语言锁的实现  http://www.cnblogs.com/niniwzw/p/3153955.html   延伸 PV原语 操作 https://www.cnblogs.com/xzh31390080/p/4390058.html
 	locator := b.bestChain.BlockLocator(nil)
 	b.chainLock.RUnlock()
 	return locator, nil
@@ -1745,9 +1748,11 @@ func New(config *Config) (*BlockChain, error) {
 	}
 
 	params := config.ChainParams
-	targetTimespan := int64(params.TargetTimespan / time.Second)
-	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
-	adjustmentFactor := params.RetargetAdjustmentFactor
+	targetTimespan := int64(params.TargetTimespan / time.Second) //  (time.Hour * 24 * 14)/60 * 1000 * 1000 * 1000 = 60 * 60 * 24 * 14 = 1209600
+	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second) //  time.Minute * 10/ （60 * 1000 * 1000 * 1000 ） = 600
+	adjustmentFactor := params.RetargetAdjustmentFactor // 4
+
+	// 块  参数初始化
 	b := BlockChain{
 		checkpoints:         config.Checkpoints,
 		checkpointsByHeight: checkpointsByHeight,
@@ -1756,21 +1761,23 @@ func New(config *Config) (*BlockChain, error) {
 		timeSource:          config.TimeSource,
 		sigCache:            config.SigCache,
 		indexManager:        config.IndexManager,
-		minRetargetTimespan: targetTimespan / adjustmentFactor,
-		maxRetargetTimespan: targetTimespan * adjustmentFactor,
-		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock),
-		index:               newBlockIndex(config.DB, params),
-		hashCache:           config.HashCache,
-		bestChain:           newChainView(nil),
-		orphans:             make(map[chainhash.Hash]*orphanBlock),
-		prevOrphans:         make(map[chainhash.Hash][]*orphanBlock),
-		warningCaches:       newThresholdCaches(vbNumBits),
-		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments),
+		minRetargetTimespan: targetTimespan / adjustmentFactor, // 1209600/ 4 = 302400
+		maxRetargetTimespan: targetTimespan * adjustmentFactor, // 1209600 * 4 = 4838400
+		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock), // (1209600 / 600 = 2016) 经历2016 个块 就递减
+		index:               newBlockIndex(config.DB, params), // 生成新的 区块链 索引
+		hashCache:           config.HashCache,  // 交易hash
+		bestChain:           newChainView(nil), // 没懂  链view ???
+		orphans:             make(map[chainhash.Hash]*orphanBlock),  // 孤儿块
+		prevOrphans:         make(map[chainhash.Hash][]*orphanBlock), // 先前 孤儿块
+		warningCaches:       newThresholdCaches(vbNumBits), // 阈值 ？？？？
+		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments), // 阈值 ？？？？
 	}
 
 	// Initialize the chain state from the passed database.  When the db
 	// does not yet contain any chain state, both it and the chain state
-	// will be initialized to contain only the genesis block.
+	// will be initialized to contain only the genesis block（创世块）.
+	// 根据 历史数据库 初始化 链 状态。
+	// 当不包含任何链状态，初始化 会根据 创世块  来进行
 	if err := b.initChainState(); err != nil {
 		return nil, err
 	}

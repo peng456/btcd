@@ -223,7 +223,7 @@ func parseScriptTemplate(script []byte, opcodes *[256]opcode) ([]parsedOpcode, e
 			pop.data = script[i+1 : i+op.length]
 			i += op.length
 
-		// Data pushes with parsed lengths -- OP_PUSHDATAP{1,2,4}.
+		// Data pushes with parsed lengths -- OP_PUSHDATAP{1,2,4}. 这三个操作是什么？？？
 		case op.length < 0:
 			var l uint
 			off := i + 1
@@ -736,10 +736,11 @@ func getSigOpCount(pops []parsedOpcode, precise bool) int {
 // in a script. a CHECKSIG operations counts for 1, and a CHECK_MULTISIG for 20.
 // If the script fails to parse, then the count up to the point of failure is
 // returned.
+// CHECKSIG ==》 +1 ；CHECK_MULTISIG ==》 +20
 func GetSigOpCount(script []byte) int {
 	// Don't check error since parseScript returns the parsed-up-to-error
 	// list of pops.
-	pops, _ := parseScript(script)
+	pops, _ := parseScript(script) // 解析出脚本 or 还原脚本 ，是的解析
 	return getSigOpCount(pops, false)
 }
 

@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	//  执行 包内 init 函数 （net 相关 性能统计）
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+
 
 	"github.com/btcsuite/btcd/blockchain/indexers"
 	"github.com/btcsuite/btcd/database"
@@ -40,6 +42,8 @@ var winServiceMain func() (bool, error)
 // optional serverChan parameter is mainly used by the service code to be
 // notified with the server once it is setup so it can gracefully stop it when
 // requested from the service control manager.
+
+
 func btcdMain(serverChan chan<- *server) error {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
@@ -57,6 +61,7 @@ func btcdMain(serverChan chan<- *server) error {
 	// Get a channel that will be closed when a shutdown signal has been
 	// triggered either from an OS signal such as SIGINT (Ctrl+C) or from
 	// another subsystem such as the RPC server.
+	// 处理 退出信号（系统信号） 只是给出交互提示，为真正关闭service，监听器
 	interrupt := interruptListener()
 	defer btcdLog.Info("Shutdown complete")
 
@@ -64,9 +69,10 @@ func btcdMain(serverChan chan<- *server) error {
 	btcdLog.Infof("Version %s", version())
 
 	// Enable http profiling server if requested.
+	// 如果http要求，处理此配置  看不懂
 	if cfg.Profile != "" {
 		go func() {
-			listenAddr := net.JoinHostPort("", cfg.Profile)
+			listenAddr := net.JoinHostPort("", cfg.Profile) // IP":"PORT
 			btcdLog.Infof("Profile server listening on %s", listenAddr)
 			profileRedirect := http.RedirectHandler("/debug/pprof",
 				http.StatusSeeOther)
@@ -76,8 +82,9 @@ func btcdMain(serverChan chan<- *server) error {
 	}
 
 	// Write cpu profile if requested.
+	// CPU 设置 （如果设置了 cpu  则，统计性能）
 	if cfg.CPUProfile != "" {
-		f, err := os.Create(cfg.CPUProfile)
+		f, err := os.Create(cfg.CPUProfile)  // 应该类似句柄
 		if err != nil {
 			btcdLog.Errorf("Unable to create cpu profile: %v", err)
 			return err
@@ -88,29 +95,37 @@ func btcdMain(serverChan chan<- *server) error {
 	}
 
 	// Perform upgrades to btcd as new versions require it.
+	// 判断升级 数据目录迁移  数据库协议升级
+	// dranm   /Users/peng/Library/Application Support/Btcd  数据目录
 	if err := doUpgrades(); err != nil {
 		btcdLog.Errorf("%v", err)
 		return err
 	}
 
 	// Return now if an interrupt signal was triggered.
+	// 启用service时，检测一下 处理 终端信号（Control + C） （应该是检测，另有协程（interrupt）在监测）
 	if interruptRequested(interrupt) {
 		return nil
 	}
 
 	// Load the block database.
+	// 加载数据库（memdb、cfg.DbType）
 	db, err := loadBlockDB()
 	if err != nil {
 		btcdLog.Errorf("%v", err)
 		return err
 	}
+
+	// 最后执行（延迟执行）
 	defer func() {
 		// Ensure the database is sync'd and closed on shutdown.
 		btcdLog.Infof("Gracefully shutting down the database...")
+		// 关闭数据库
 		db.Close()
 	}()
 
 	// Return now if an interrupt signal was triggered.
+	// 检测 service 状态
 	if interruptRequested(interrupt) {
 		return nil
 	}
@@ -119,6 +134,8 @@ func btcdMain(serverChan chan<- *server) error {
 	//
 	// NOTE: The order is important here because dropping the tx index also
 	// drops the address index since it relies on it.
+	// 	DropAddrIndex        bool          `long:"dropaddrindex" description:"Deletes the address-based transaction index from the database on start up and then exits."`
+	//  还没太理解，为什么要 drop
 	if cfg.DropAddrIndex {
 		if err := indexers.DropAddrIndex(db, interrupt); err != nil {
 			btcdLog.Errorf("%v", err)
@@ -144,29 +161,43 @@ func btcdMain(serverChan chan<- *server) error {
 		return nil
 	}
 
+	// https://www.jianshu.com/p/d3667b026938  简书 分析 btcd
+
 	// Create server and start it.
+	// 创建server and start it
+	// 参数： 监听地址（？？？？  应该是服务（协程）），   数据库 ，  参数  ， 终端信号处理协程
+	// 服务初始化
 	server, err := newServer(cfg.Listeners, db, activeNetParams.Params,
 		interrupt)
 	if err != nil {
 		// TODO: this logging could do with some beautifying.
+		// 启动失败
 		btcdLog.Errorf("Unable to start server on %v: %v",
 			cfg.Listeners, err)
 		return err
 	}
+
+	// 最后执行（延迟执行）（server停止后的提示）
 	defer func() {
 		btcdLog.Infof("Gracefully shutting down the server...")
 		server.Stop()
 		server.WaitForShutdown()
 		srvrLog.Infof("Server shutdown complete")
 	}()
+
+	// 服务启动
 	server.Start()
 	if serverChan != nil {
+		// 仅仅是接受  在调用的地方  ，有可能处理？？？？
 		serverChan <- server
 	}
 
 	// Wait until the interrupt signal is received from an OS signal or
 	// shutdown is requested through one of the subsystems such as the RPC
 	// server.
+
+	// 停止 两种方式 1、OS signal  2、子服务请求（  RPC server  哪个是？？？）
+	// channel 这种输出没有接受？？？？
 	<-interrupt
 	return nil
 }
@@ -213,6 +244,7 @@ func blockDbPath(dbType string) string {
 // warnMultipleDBs shows a warning if multiple block database types are detected.
 // This is not a situation most users want.  It is handy for development however
 // to support multiple side-by-side databases.
+// 多类型数据库并存支持btc检测&& 警告（这是不允许的）
 func warnMultipleDBs() {
 	// This is intentionally not using the known db types which depend
 	// on the database types compiled into the binary since we want to
@@ -261,18 +293,22 @@ func loadBlockDB() (database.DB, error) {
 		return db, nil
 	}
 
+	// 多类型数据库并存支持btc检测&& 警告（这是不鼓励的，但不禁止）
 	warnMultipleDBs()
 
 	// The database name is based on the database type.
+	// 获取数据库地址（目录或者文件）
 	dbPath := blockDbPath(cfg.DbType)
 
 	// The regression test is special in that it needs a clean database for
 	// each run, so remove it now if it already exists.
+	// 删除 测试 数据库（以防数据混乱？？？）
 	removeRegressionDB(dbPath)
 
 	btcdLog.Infof("Loading block database from '%s'", dbPath)
 	db, err := database.Open(cfg.DbType, dbPath, activeNetParams.Net)
 	if err != nil {
+		// 数据库 err 处理 1、抛异常 2、不存在，则建立
 		// Return the error if it's not because the database doesn't
 		// exist.
 		if dbErr, ok := err.(database.Error); !ok || dbErr.ErrorCode !=
@@ -327,6 +363,7 @@ func main() {
 	}
 
 	// Work around defer not working after os.Exit()
+	// 为啥 btcdMain 函数 参数 是niL
 	if err := btcdMain(nil); err != nil {
 		os.Exit(1)
 	}

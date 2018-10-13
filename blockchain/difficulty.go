@@ -142,7 +142,14 @@ func CalcWork(bits uint32) *big.Int {
 	// Return a work value of zero if the passed difficulty bits represent
 	// a negative number. Note this should not happen in practice with valid
 	// blocks, but an invalid block could trigger it.
-	difficultyNum := CompactToBig(bits)
+	// 新难度值 = 旧难度值 * ( 过去2016个区块花费时长 / 20160 分钟 )
+	// 工作量证明需要有一个目标值。比特币工作量证明的目标值（Target）的计算公式如下
+	// 目标值 = 最大目标值 / 难度值
+	// 其中最大目标值为一个恒定值：   1 << 256
+	//0x00000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+	// oneLsh256 最大目标值，denominator 难度值，
+
+	difficultyNum := CompactToBig(bits) // 转换 bigx
 	if difficultyNum.Sign() <= 0 {
 		return big.NewInt(0)
 	}
@@ -221,6 +228,7 @@ func (b *BlockChain) findPrevTestNetDifficulty(startNode *blockNode) uint32 {
 func (b *BlockChain) calcNextRequiredDifficulty(lastNode *blockNode, newBlockTime time.Time) (uint32, error) {
 	// Genesis block.
 	if lastNode == nil {
+		// 	PowLimitBits:             0x1d00ffff, 创世块难度
 		return b.chainParams.PowLimitBits, nil
 	}
 
@@ -253,7 +261,7 @@ func (b *BlockChain) calcNextRequiredDifficulty(lastNode *blockNode, newBlockTim
 
 	// Get the block node at the previous retarget (targetTimespan days
 	// worth of blocks).
-	firstNode := lastNode.RelativeAncestor(b.blocksPerRetarget - 1)
+	firstNode := lastNode.RelativeAncestor(b.blocksPerRetarget - 1) // 2016 -1
 	if firstNode == nil {
 		return 0, AssertError("unable to obtain previous retarget block")
 	}

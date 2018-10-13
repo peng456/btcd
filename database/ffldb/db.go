@@ -1848,15 +1848,18 @@ func (db *db) View(fn func(database.Tx) error) error {
 	// releases all mutexes and resources.  There is no guarantee the caller
 	// won't use recover and keep going.  Thus, the database must still be
 	// in a usable state on panics due to caller issues.
+	// 用户方法发生异常  则回滚（TX）
 	defer rollbackOnPanic(tx)
 
 	tx.managed = true
+	// 执行用户方法
 	err = fn(tx)
 	tx.managed = false
 	if err != nil {
 		// The error is ignored here because nothing was written yet
 		// and regardless of a rollback failure, the tx is closed now
 		// anyways.
+		// 交易回滚
 		_ = tx.Rollback()
 		return err
 	}

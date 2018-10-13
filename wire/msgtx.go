@@ -178,7 +178,7 @@ var scriptPool scriptFreeList = make(chan []byte, freeListMaxItems)
 // OutPoint defines a bitcoin data type that is used to track previous
 // transaction outputs.
 type OutPoint struct {
-	Hash  chainhash.Hash
+	Hash  chainhash.Hash  // is used to track previous transaction outputs
 	Index uint32
 }
 
@@ -208,10 +208,10 @@ func (o OutPoint) String() string {
 
 // TxIn defines a bitcoin transaction input.
 type TxIn struct {
-	PreviousOutPoint OutPoint
-	SignatureScript  []byte
-	Witness          TxWitness
-	Sequence         uint32
+	PreviousOutPoint OutPoint  // 未花费tx
+	SignatureScript  []byte  // 签名
+	Witness          TxWitness // 见证 ？？？(见证者 数组（应该是 一组 地址）)
+	Sequence         uint32   // 序列化
 }
 
 // SerializeSize returns the number of bytes it would take to serialize the
@@ -259,8 +259,8 @@ func (t TxWitness) SerializeSize() int {
 
 // TxOut defines a bitcoin transaction output.
 type TxOut struct {
-	Value    int64
-	PkScript []byte
+	Value    int64  // 支出数额
+	PkScript []byte   // 干啥的？？？  脚本签名？？？，交易信息加密
 }
 
 // SerializeSize returns the number of bytes it would take to serialize the
@@ -288,9 +288,9 @@ func NewTxOut(value int64, pkScript []byte) *TxOut {
 // inputs and outputs.
 type MsgTx struct {
 	Version  int32
-	TxIn     []*TxIn
-	TxOut    []*TxOut
-	LockTime uint32
+	TxIn     []*TxIn   // 入 记录
+	TxOut    []*TxOut  // 出 记录
+	LockTime uint32    // 锁定时间？？？
 }
 
 // AddTxIn adds a transaction input to the message.
