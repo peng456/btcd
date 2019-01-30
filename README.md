@@ -1,4 +1,4 @@
-这个项目直接fork 自 https://github.com/btcsuite/btcd， 这是比特币的 go语言 实现。
+这个项目直接fork 自 https://github.com/btcsuite/btcd，  btcd 是比特币的 go语言 实现。
 
 我把笔记直接写在了代码里面。
 
