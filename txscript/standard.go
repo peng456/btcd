@@ -385,6 +385,7 @@ func CalcMultiSigStats(script []byte) (int, int, error) {
 // payToPubKeyHashScript creates a new script to pay a transaction
 // output to a 20-byte pubkey hash. It is expected that the input is a valid
 // hash.
+// https://www.8btc.com/article/38515  脚本、验证（堆栈 OP）
 func payToPubKeyHashScript(pubKeyHash []byte) ([]byte, error) {
 	return NewScriptBuilder().AddOp(OP_DUP).AddOp(OP_HASH160).
 		AddData(pubKeyHash).AddOp(OP_EQUALVERIFY).AddOp(OP_CHECKSIG).
@@ -419,6 +420,7 @@ func payToPubKeyScript(serializedPubKey []byte) ([]byte, error) {
 
 // PayToAddrScript creates a new script to pay a transaction output to a the
 // specified address.
+// addr 地址，bit to 的方向，给 addr 比特币
 func PayToAddrScript(addr btcutil.Address) ([]byte, error) {
 	const nilAddrErrStr = "unable to generate payment script for nil address"
 

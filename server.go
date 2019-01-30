@@ -1,5 +1,5 @@
 // Copyright (c) 2013-2017 The btcsuite developers
-// Copyright (c) 2015-2017 The Decred developers
+// Copyright (c) 2015-2018 The Decred developers
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
@@ -43,6 +43,12 @@ import (
 const (
 	// defaultServices describes the default services that are supported by
 	// the server.
+	// 服务节点 描述    SFNodeNetwork表明Peer是一个全节点 SFNodeBloom表明Peer支持Bloom过滤;
+	// wire.SFNodeWitness 见证隔离  https://blog.csdn.net/qq_26499321/article/details/76021275   https://blog.csdn.net/taifei/article/details/73544535
+	// 见证信息就是哪个节点在什么时间验证交易信息的可靠性 . 如果隔离了“见证信息”，那么区块链只记录交易信息.
+	// https://blog.csdn.net/weixin_42874184/article/details/81710113  隔离见证（三）：优点VS缺点 | 比特币技术普及
+
+	// wire.SFNodeCF 提交过滤  没动
 	defaultServices = wire.SFNodeNetwork | wire.SFNodeBloom |
 		wire.SFNodeWitness | wire.SFNodeCF
 
@@ -94,7 +100,7 @@ func (oa *onionAddr) Network() string {
 // Ensure onionAddr implements the net.Addr interface.
 var _ net.Addr = (*onionAddr)(nil)
 
-// onionAddr implements the net.Addr interface with two struct fields
+// simpleAddr implements the net.Addr interface with two struct fields
 type simpleAddr struct {
 	net, addr string
 }
@@ -385,10 +391,99 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) {
 	}
 }
 
+// hasServices returns whether or not the provided advertised service flags have
+// all of the provided desired service flags set.
+func hasServices(advertised, desired wire.ServiceFlag) bool {
+	return advertised&desired == desired
+}
+
 // OnVersion is invoked when a peer receives a version bitcoin message
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
-func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) {
+func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
+	// Update the address manager with the advertised services for outbound
+	// connections in case they have changed.  This is not done for inbound
+	// connections to help prevent malicious behavior and is skipped when
+	// running on the simulation test network since it is only intended to
+	// connect to specified peers and actively avoids advertising and
+	// connecting to discovered peers.
+	//
+	// NOTE: This is done before rejecting peers that are too old to ensure
+	// it is updated regardless in the case a new minimum protocol version is
+	// enforced and the remote node has not upgraded yet.
+	isInbound := sp.Inbound()
+	remoteAddr := sp.NA()
+	addrManager := sp.server.addrManager
+	if !cfg.SimNet && !isInbound {
+		addrManager.SetServices(remoteAddr, msg.Services)
+	}
+
+	// Ignore peers that have a protcol version that is too old.  The peer
+	// negotiation logic will disconnect it after this callback returns.
+	if msg.ProtocolVersion < int32(peer.MinAcceptableProtocolVersion) {
+		return nil
+	}
+
+	// Reject outbound peers that are not full nodes.
+	wantServices := wire.SFNodeNetwork
+	if !isInbound && !hasServices(msg.Services, wantServices) {
+		missingServices := wantServices & ^msg.Services
+		srvrLog.Debugf("Rejecting peer %s with services %v due to not "+
+			"providing desired services %v", sp.Peer, msg.Services,
+			missingServices)
+		reason := fmt.Sprintf("required services %#x not offered",
+			uint64(missingServices))
+		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
+	}
+
+	// Update the address manager and request known addresses from the
+	// remote peer for outbound connections.  This is skipped when running
+	// on the simulation test network since it is only intended to connect
+	// to specified peers and actively avoids advertising and connecting to
+	// discovered peers.
+	if !cfg.SimNet && !isInbound {
+		// After soft-fork activation, only make outbound
+		// connection to peers if they flag that they're segwit
+		// enabled.
+		chain := sp.server.chain
+		segwitActive, err := chain.IsDeploymentActive(chaincfg.DeploymentSegwit)
+		if err != nil {
+			peerLog.Errorf("Unable to query for segwit soft-fork state: %v",
+				err)
+			return nil
+		}
+
+		if segwitActive && !sp.IsWitnessEnabled() {
+			peerLog.Infof("Disconnecting non-segwit peer %v, isn't segwit "+
+				"enabled and we need more segwit enabled peers", sp)
+			sp.Disconnect()
+			return nil
+		}
+
+		// Advertise the local address when the server accepts incoming
+		// connections and it believes itself to be close to the best known tip.
+		if !cfg.DisableListen && sp.server.syncManager.IsCurrent() {
+			// Get address that best matches.
+			lna := addrManager.GetBestLocalAddress(remoteAddr)
+			if addrmgr.IsRoutable(lna) {
+				// Filter addresses the peer already knows about.
+				addresses := []*wire.NetAddress{lna}
+				sp.pushAddrMsg(addresses)
+			}
+		}
+
+		// Request known addresses if the server address manager needs
+		// more and the peer has a protocol version new enough to
+		// include a timestamp with addresses.
+		hasTimestamp := sp.ProtocolVersion() >= wire.NetAddressTimeVersion
+		if addrManager.NeedMoreAddresses() && hasTimestamp {
+			sp.QueueMessage(wire.NewMsgGetAddr(), nil)
+		}
+
+		// Mark the address as a known good address.
+		addrManager.Good(remoteAddr)
+	}
+
 	// Add the remote peer time as a sample for creating an offset against
 	// the local clock to keep the network time in sync.
 	sp.server.timeSource.AddTimeSample(sp.Addr(), msg.Timestamp)
@@ -400,63 +495,9 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) {
 	// is received.
 	sp.setDisableRelayTx(msg.DisableRelayTx)
 
-	// Update the address manager and request known addresses from the
-	// remote peer for outbound connections.  This is skipped when running
-	// on the simulation test network since it is only intended to connect
-	// to specified peers and actively avoids advertising and connecting to
-	// discovered peers.
-	if !cfg.SimNet {
-		addrManager := sp.server.addrManager
-
-		// Outbound connections.
-		if !sp.Inbound() {
-			// After soft-fork activation, only make outbound
-			// connection to peers if they flag that they're segwit
-			// enabled.
-			chain := sp.server.chain
-			segwitActive, err := chain.IsDeploymentActive(chaincfg.DeploymentSegwit)
-			if err != nil {
-				peerLog.Errorf("Unable to query for segwit "+
-					"soft-fork state: %v", err)
-				return
-			}
-
-			if segwitActive && !sp.IsWitnessEnabled() {
-				peerLog.Infof("Disconnecting non-segwit "+
-					"peer %v, isn't segwit enabled and "+
-					"we need more segwit enabled peers", sp)
-				sp.Disconnect()
-				return
-			}
-
-			// TODO(davec): Only do this if not doing the initial block
-			// download and the local address is routable.
-			if !cfg.DisableListen /* && isCurrent? */ {
-				// Get address that best matches.
-				lna := addrManager.GetBestLocalAddress(sp.NA())
-				if addrmgr.IsRoutable(lna) {
-					// Filter addresses the peer already knows about.
-					addresses := []*wire.NetAddress{lna}
-					sp.pushAddrMsg(addresses)
-				}
-			}
-
-			// Request known addresses if the server address manager needs
-			// more and the peer has a protocol version new enough to
-			// include a timestamp with addresses.
-			hasTimestamp := sp.ProtocolVersion() >=
-				wire.NetAddressTimeVersion
-			if addrManager.NeedMoreAddresses() && hasTimestamp {
-				sp.QueueMessage(wire.NewMsgGetAddr(), nil)
-			}
-
-			// Mark the address as a known good address.
-			addrManager.Good(sp.NA())
-		}
-	}
-
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
+	return nil
 }
 
 // OnMemPool is invoked when a peer receives a mempool bitcoin message.
@@ -960,7 +1001,7 @@ func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
 
 	// Fetch the current existing cache so we can decide if we need to
 	// extend it or if its adequate as is.
-	sp.server.cfCheckptCachesMtx.Lock()
+	sp.server.cfCheckptCachesMtx.RLock()
 	checkptCache := sp.server.cfCheckptCaches[msg.FilterType]
 
 	// If the set of block hashes is beyond the current size of the cache,
@@ -969,34 +1010,41 @@ func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
 	var updateCache bool
 	if len(blockHashes) > len(checkptCache) {
 		// Now that we know we'll need to modify the size of the cache,
-		// we'll defer the release of the write lock so we don't
-		// forget.
+		// we'll release the read lock and grab the write lock to
+		// possibly expand the cache size.
+		sp.server.cfCheckptCachesMtx.RUnlock()
+
+		sp.server.cfCheckptCachesMtx.Lock()
 		defer sp.server.cfCheckptCachesMtx.Unlock()
 
-		// We'll mark that we need to update the cache for below and
-		// also expand the size of the cache in place.
-		updateCache = true
+		// Now that we have the write lock, we'll check again as it's
+		// possible that the cache has already been expanded.
+		checkptCache = sp.server.cfCheckptCaches[msg.FilterType]
 
-		additionalLength := len(blockHashes) - len(checkptCache)
-		newEntries := make([]cfHeaderKV, additionalLength)
+		// If we still need to expand the cache, then We'll mark that
+		// we need to update the cache for below and also expand the
+		// size of the cache in place.
+		if len(blockHashes) > len(checkptCache) {
+			updateCache = true
 
-		peerLog.Infof("Growing size of checkpoint cache from %v to %v "+
-			"block hashes", len(checkptCache), len(blockHashes))
+			additionalLength := len(blockHashes) - len(checkptCache)
+			newEntries := make([]cfHeaderKV, additionalLength)
 
-		checkptCache = append(
-			sp.server.cfCheckptCaches[msg.FilterType],
-			newEntries...,
-		)
+			peerLog.Infof("Growing size of checkpoint cache from %v to %v "+
+				"block hashes", len(checkptCache), len(blockHashes))
+
+			checkptCache = append(
+				sp.server.cfCheckptCaches[msg.FilterType],
+				newEntries...,
+			)
+		}
 	} else {
-		// Otherwise, we'll release the write lock, then grab the read
-		// lock, as the cache is already properly sized.
-		sp.server.cfCheckptCachesMtx.Unlock()
-		sp.server.cfCheckptCachesMtx.RLock()
+		// Otherwise, we'll hold onto the read lock for the remainder
+		// of this method.
+		defer sp.server.cfCheckptCachesMtx.RUnlock()
 
 		peerLog.Tracef("Serving stale cache of size %v",
 			len(checkptCache))
-
-		defer sp.server.cfCheckptCachesMtx.RUnlock()
 	}
 
 	// Now that we know the cache is of an appropriate size, we'll iterate
@@ -1004,7 +1052,7 @@ func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
 	// a re-org has occurred so items in the db are now in the main china
 	// while the cache has been partially invalidated.
 	var forkIdx int
-	for forkIdx = len(checkptCache); forkIdx > 0; forkIdx-- {
+	for forkIdx = len(blockHashes); forkIdx > 0; forkIdx-- {
 		if checkptCache[forkIdx-1].blockHash == blockHashes[forkIdx-1] {
 			break
 		}
@@ -2003,6 +2051,9 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 // peerHandler is used to handle peer operations such as adding and removing
 // peers to and from the server, banning peers, and broadcasting messages to
 // peers.  It must be run in a goroutine.
+
+// 
+
 func (s *server) peerHandler() {
 	// Start the address manager and sync manager, both of which are needed
 	// by peers.  This is done here since their lifecycle is closely tied
@@ -2245,9 +2296,11 @@ func (s *server) Start() {
 
 	// Start the peer handler which in turn starts the address and block
 	// managers.
+	// sync.WaitGroup  ??? 多协程，是的
 	s.wg.Add(1)
 	go s.peerHandler()
 
+	// 启动失败==》 应急方案
 	if s.nat != nil {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
@@ -2391,8 +2444,8 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 }
 
 func (s *server) upnpUpdateThread() {
-	// Go off immediately to prevent code duplication, thereafter we renew
-	// lease every 15 minutes.
+	// Go off immediately to prevent code duplication（阻止代码重复）, thereafter we renew
+	// lease every 15 minutes.(重新启动至少15分钟（间隔15分钟）)
 	timer := time.NewTimer(0 * time.Second)
 	lport, _ := strconv.ParseInt(activeNetParams.DefaultPort, 10, 16)
 	first := true
@@ -2427,6 +2480,8 @@ out:
 				srvrLog.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
 				first = false
 			}
+
+			// 至少15 分钟
 			timer.Reset(time.Minute * 15)
 		case <-s.quit:
 			break out
@@ -2496,21 +2551,45 @@ func setupRPCListeners() ([]net.Listener, error) {
 // newServer returns a new btcd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
+// server 初始化
+// listenAddrs 服务监听端口
 func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Params, interrupt <-chan struct{}) (*server, error) {
+	// defaultServices  默认服务
 	services := defaultServices
+
+	// NoPeerBloomFilters  没有节点 Bloom 过滤器
+	// http://www.docin.com/p-905966302.html （布隆姆过滤器  判断 某元素 不在集合内）
+	// 原理 代码实现
+	// https://www.jianshu.com/p/b0c0edf7686e
+	// https://www.cnblogs.com/en-heng/p/5881997.html?utm_source=itdadao&utm_medium=referral
 	if cfg.NoPeerBloomFilters {
-		services &^= wire.SFNodeBloom
+		services &^= wire.SFNodeBloom  // SFNodeNetwork表明Peer是一个全节点
 	}
+
+	// NoCFilters 关闭committed过滤(CF)，启用
 	if cfg.NoCFilters {
 		services &^= wire.SFNodeCF
 	}
 
+	// addrmgr 地址管理类  https://www.jianshu.com/p/e897f321dce1
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
 
+	// 网络监听 定义
 	var listeners []net.Listener
+
+	//  NAT traversal options for example UPNP or
+	//// NAT-PMP
+	// 内网 NAT 处理
+	// UPnP https://blog.csdn.net/ddffr/article/details/78800323
+
 	var nat NAT
+
+	// DisableListen 监听是否启动
 	if !cfg.DisableListen {
+		// 启动监听
 		var err error
+
+		// 初始化网络监听服务,返回 listeners, nat
 		listeners, nat, err = initListeners(amgr, listenAddrs, services)
 		if err != nil {
 			return nil, err
@@ -2520,25 +2599,26 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		}
 	}
 
+	// 初始化  服务配置
 	s := server{
-		chainParams:          chainParams,
-		addrManager:          amgr,
-		newPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		donePeers:            make(chan *serverPeer, cfg.MaxPeers),
-		banPeers:             make(chan *serverPeer, cfg.MaxPeers),
-		query:                make(chan interface{}),
-		relayInv:             make(chan relayMsg, cfg.MaxPeers),
-		broadcast:            make(chan broadcastMsg, cfg.MaxPeers),
+		chainParams:          chainParams,  // 链参数
+		addrManager:          amgr,  // 地址管理
+		newPeers:             make(chan *serverPeer, cfg.MaxPeers),  //新服务节点，最大连接数
+		donePeers:            make(chan *serverPeer, cfg.MaxPeers),  // 已经接受节点
+		banPeers:             make(chan *serverPeer, cfg.MaxPeers), // 禁止节点
+		query:                make(chan interface{}), // 没懂
+		relayInv:             make(chan relayMsg, cfg.MaxPeers), // 没懂
+		broadcast:            make(chan broadcastMsg, cfg.MaxPeers), // 广播
 		quit:                 make(chan struct{}),
 		modifyRebroadcastInv: make(chan interface{}),
 		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
 		nat:                  nat,
 		db:                   db,
-		timeSource:           blockchain.NewMedianTime(),
+		timeSource:           blockchain.NewMedianTime(),  // 200 ???
 		services:             services,
-		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
-		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
-		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
+		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize), // 默认待签名 缓存记录数量大小  100000
+		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),// 默认待签名hash  缓存记录的hash 数量大小  100000
+		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),  // 没懂
 	}
 
 	// Create the transaction and address indexes if needed.
@@ -2547,6 +2627,12 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	// the addrindex uses data from the txindex during catchup.  If the
 	// addrindex is run first, it may not have the transactions from the
 	// current block indexed.
+	// 区块链 索引
+
+	// txindex  维护一个完整hash-based交易索引。 这样可以通过getrawtransaction RPC让交易数据可用。
+	// AddrIndex  维护一个address-based交易索引，这样可以让searchrawtransactions RPC可用。
+
+
 	var indexes []indexers.Indexer
 	if cfg.TxIndex || cfg.AddrIndex {
 		// Enable transaction index if address index is enabled since it
@@ -2559,7 +2645,7 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 			indxLog.Info("Transaction index is enabled")
 		}
 
-		s.txIndex = indexers.NewTxIndex(db)
+		s.txIndex = indexers.NewTxIndex(db)  // 数据库 + 当前块id(当前块id 没有初始化)  (包含块 hash )
 		indexes = append(indexes, s.txIndex)
 	}
 	if cfg.AddrIndex {
@@ -2567,6 +2653,7 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		s.addrIndex = indexers.NewAddrIndex(db, chainParams)
 		indexes = append(indexes, s.addrIndex)
 	}
+
 	if !cfg.NoCFilters {
 		indxLog.Info("Committed filter index is enabled")
 		s.cfIndex = indexers.NewCfIndex(db, chainParams)
@@ -2574,22 +2661,25 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	}
 
 	// Create an index manager if any of the optional indexes are enabled.
+	// 创建 索引 管理器
 	var indexManager blockchain.IndexManager
 	if len(indexes) > 0 {
 		indexManager = indexers.NewManager(db, indexes)
 	}
 
 	// Merge given checkpoints with the default ones unless they are disabled.
+	// 检查节点   和  cfg 提供检查节点合并
 	var checkpoints []chaincfg.Checkpoint
 	if !cfg.DisableCheckpoints {
 		checkpoints = mergeCheckpoints(s.chainParams.Checkpoints, cfg.addCheckpoints)
 	}
 
 	// Create a new block chain instance with the appropriate configuration.
+	// 新建区块
 	var err error
-	s.chain, err = blockchain.New(&blockchain.Config{
+	s.chain, err = blockchain.New(&blockchain.Config{ // 配置
 		DB:           s.db,
-		Interrupt:    interrupt,
+		Interrupt:    interrupt,  // 中断信号 处理器
 		ChainParams:  s.chainParams,
 		Checkpoints:  checkpoints,
 		TimeSource:   s.timeSource,
@@ -2822,8 +2912,10 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 // initListeners initializes the configured net listeners and adds any bound
 // addresses to the address manager. Returns the listeners and a NAT interface,
 // which is non-nil if UPnP is in use.
+// UPnP https://blog.csdn.net/ddffr/article/details/78800323
 func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wire.ServiceFlag) ([]net.Listener, NAT, error) {
 	// Listen for TCP connections at the configured addresses
+	// 分析listenAddrs IP地址
 	netAddrs, err := parseListeners(listenAddrs)
 	if err != nil {
 		return nil, nil, err
@@ -2831,6 +2923,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 
 	listeners := make([]net.Listener, 0, len(netAddrs))
 	for _, addr := range netAddrs {
+		// 启动网络监听（ 或者应该只是检测一下）
 		listener, err := net.Listen(addr.Network(), addr.String())
 		if err != nil {
 			srvrLog.Warnf("Can't listen on %s: %v", addr, err)
@@ -2841,6 +2934,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 
 	var nat NAT
 	if len(cfg.ExternalIPs) != 0 {
+		// 额外IP  白名单
 		defaultPort, err := strconv.ParseUint(activeNetParams.DefaultPort, 10, 16)
 		if err != nil {
 			srvrLog.Errorf("Can not parse default port %s for active chain: %v",
@@ -2875,6 +2969,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 			}
 		}
 	} else {
+		// Upnp 协议 cfg.Upnp 是否启用 Upnp 协议
 		if cfg.Upnp {
 			var err error
 			nat, err = Discover()
@@ -2887,6 +2982,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 		// Add bound addresses to address manager to be advertised to peers.
 		for _, listener := range listeners {
 			addr := listener.Addr().String()
+			// 添加网络节点
 			err := addLocalAddress(amgr, addr, services)
 			if err != nil {
 				amgrLog.Warnf("Skipping bound address %s: %v", addr, err)
@@ -2894,6 +2990,7 @@ func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wir
 		}
 	}
 
+	// 返回 listeners，nat
 	return listeners, nat, nil
 }
 

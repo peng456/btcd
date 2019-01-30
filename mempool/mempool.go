@@ -157,6 +157,8 @@ type orphanTx struct {
 // TxPool is used as a source of transactions that need to be mined into blocks
 // and relayed to other peers.  It is safe for concurrent access from multiple
 // peers.
+
+// 交易pool ,交易记录，待打包 数据
 type TxPool struct {
 	// The following variables must only be used atomically.
 	lastUpdated int64 // last time pool was updated

@@ -460,7 +460,7 @@ func writeElement(w io.Writer, element interface{}) error {
 	return binary.Write(w, littleEndian, element)
 }
 
-// writeElements writes multiple items to w.  It is equivalent to multiple
+// writeElements writes multiple items to w.  It is equivalent to multiple   w指啥
 // calls to writeElement.
 func writeElements(w io.Writer, elements ...interface{}) error {
 	for _, element := range elements {

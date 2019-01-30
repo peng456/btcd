@@ -72,42 +72,47 @@ type blockNode struct {
 	// padding adds up.
 
 	// parent is the parent block for this node.
-	parent *blockNode
+	parent *blockNode   // 父节点？？？
 
 	// hash is the double sha 256 of the block.
-	hash chainhash.Hash
+	hash chainhash.Hash  // 本节点  hash
 
 	// workSum is the total amount of work in the chain up to and including
 	// this node.
+	// 工作量 2^64
 	workSum *big.Int
 
 	// height is the position in the block chain.
+	// 当前 区块链位置 （第多少个 ）
 	height int32
 
 	// Some fields from block headers to aid in best chain selection and
 	// reconstructing headers from memory.  These must be treated as
 	// immutable and are intentionally ordered to avoid padding on 64-bit
 	// platforms.
-	version    int32
-	bits       uint32
-	nonce      uint32
-	timestamp  int64
-	merkleRoot chainhash.Hash
+	version    int32  // 版本
+	bits       uint32 // 2^32  目标  ？？？
+	nonce      uint32 // 随机字符串
+	timestamp  int64  // 时间戳
+	merkleRoot chainhash.Hash // 默克尔hash
 
 	// status is a bitfield representing the validation state of the block. The
 	// status field, unlike the other fields, may be written to and so should
 	// only be accessed using the concurrent-safe NodeStatus method on
 	// blockIndex once the node has been added to the global index.
-	status blockStatus
+	status blockStatus  // 并发安全，是否加入到全局索引
 }
 
 // initBlockNode initializes a block node from the given header and parent node,
 // calculating the height and workSum from the respective fields on the parent.
 // This function is NOT safe for concurrent access.  It must only be called when
 // initially creating a node.
+// 区块链节点  blockHeader  parent（  parent  为 nil  则 本节点是 创世节点  ，因为其是第一个节点，故无 前节点）
 func initBlockNode(node *blockNode, blockHeader *wire.BlockHeader, parent *blockNode) {
 	*node = blockNode{
 		hash:       blockHeader.BlockHash(),
+		// 工作量证明 （咋计算出来的） 计算次数  CalcWork 如何实现 https://blog.csdn.net/lucky_greenegg/article/details/52530570 （这个blog 貌似有错）
+		// blockHeader.Bits  这是啥
 		workSum:    CalcWork(blockHeader.Bits),
 		version:    blockHeader.Version,
 		bits:       blockHeader.Bits,
@@ -117,7 +122,10 @@ func initBlockNode(node *blockNode, blockHeader *wire.BlockHeader, parent *block
 	}
 	if parent != nil {
 		node.parent = parent
+
+		// height 当前节点 第多少（++1）
 		node.height = parent.height + 1
+		// 工作量证明 也是累加  ++workSum
 		node.workSum = node.workSum.Add(parent.workSum, node.workSum)
 	}
 }
@@ -182,6 +190,8 @@ func (node *blockNode) RelativeAncestor(distance int32) *blockNode {
 // prior to, and including, the block node.
 //
 // This function is safe for concurrent access.
+
+// 计算中值  （前11个父区块时间 ===》 排序  ===》 取中值）
 func (node *blockNode) CalcPastMedianTime() time.Time {
 	// Create a slice of the previous few block timestamps used to calculate
 	// the median per the number defined by the constant medianTimeBlocks.
@@ -199,7 +209,7 @@ func (node *blockNode) CalcPastMedianTime() time.Time {
 	// will be fewer than desired near the beginning of the block chain
 	// and sort them.
 	timestamps = timestamps[:numNodes]
-	sort.Sort(timeSorter(timestamps))
+	sort.Sort(timeSorter(timestamps))  // 排序
 
 	// NOTE: The consensus rules incorrectly calculate the median for even
 	// numbers of blocks.  A true median averages the middle two elements

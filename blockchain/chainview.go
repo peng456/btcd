@@ -96,6 +96,7 @@ func (c *chainView) tip() *blockNode {
 // nil if there is no tip.
 //
 // This function is safe for concurrent access.
+// 返回最新节点 blockNode
 func (c *chainView) Tip() *blockNode {
 	c.mtx.Lock()
 	tip := c.tip()

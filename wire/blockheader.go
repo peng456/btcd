@@ -13,9 +13,13 @@ import (
 )
 
 // MaxBlockHeaderPayload is the maximum number of bytes a block header can be.
-// Version 4 bytes + Timestamp 4 bytes + Bits 4 bytes + Nonce 4 bytes +
+// Version 4 bytes + Timestamp 4 bytes（十进制 10位） + Bits 4 bytes + Nonce 4 bytes +
 // PrevBlock and MerkleRoot hashes.
-const MaxBlockHeaderPayload = 16 + (chainhash.HashSize * 2)
+// Bits 4 bytes  ???? （ 这是啥 ）   Nonce 4 bytes （随机数）   ????
+//不停的变更区块头中的随机数即nonce的数值，并对每次变更后的的区块头做双重SHA256运算（即SHA256(SHA256(Block_Header))），将结果值与当前网络的目标值做对比，如果小于目标值，则解题成功，工作量证明完成。
+
+
+const MaxBlockHeaderPayload = 16 + (chainhash.HashSize * 2)  // 16  + 32 *2 = 80 bytes
 
 // BlockHeader defines information about a block and is used in the bitcoin
 // block (MsgBlock) and headers (MsgHeaders) messages.
@@ -33,10 +37,10 @@ type BlockHeader struct {
 	// uint32 on the wire and therefore is limited to 2106.
 	Timestamp time.Time
 
-	// Difficulty target for the block.
+	// Difficulty target for the block. 目标值 （无符号整数（32位 2**32） Range: 0 through 4294967295.（42 亿））
 	Bits uint32
 
-	// Nonce used to generate the block.
+	// Nonce used to generate the block. 随机值，用来生成块
 	Nonce uint32
 }
 
@@ -50,10 +54,13 @@ func (h *BlockHeader) BlockHash() chainhash.Hash {
 	// transactions.  Ignore the error returns since there is no way the
 	// encode could fail except being out of memory which would cause a
 	// run-time panic.
+	// 80 byte
 	buf := bytes.NewBuffer(make([]byte, 0, MaxBlockHeaderPayload))
+
+	// 写入缓存buf
 	_ = writeBlockHeader(buf, 0, h)
 
-	return chainhash.DoubleHashH(buf.Bytes())
+	return chainhash.DoubleHashH(buf.Bytes())  // 双重 hash
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
